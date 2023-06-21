@@ -164,13 +164,27 @@ func getAllDivers(g *gin.Context) {
 func getMaxDepth(g *gin.Context) {
 	nameOrId := g.Query("nameOrId")
 
-	maxDepth, err := db.Query("SELECT MAX(depth) FROM divelogs WHERE diverId = ? ", nameOrId)
+	query := "SELECT MAX(depth) FROM divelogs WHERE diverId = ?"
+	rows, err := db.Query(query, nameOrId)
 	if err != nil {
-		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query maximum depth"})
-		return
+		log.Fatal(err)
 	}
-	g.JSON(http.StatusOK, gin.H{"maxDepth": maxDepth})
-	return
+	defer rows.Close()
+
+	var maxDepth sql.NullFloat64
+	if rows.Next() {
+		err = rows.Scan(&maxDepth)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// Check if the maximum depth is NULL, and set it to 0.0 if it is
+	if maxDepth.Valid {
+		fmt.Printf("Maximum depth for diverId %s: %.2f\n", nameOrId, maxDepth.Float64)
+	} else {
+		fmt.Printf("No maximum depth found for diverId %s\n", nameOrId)
+	}
 }
 
 func queryDiversInformation(c *gin.Context) {
