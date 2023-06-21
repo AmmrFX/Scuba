@@ -1,13 +1,13 @@
 package main
 
 import (
-	"SCUBA/models"
+	"Scuba/models"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +20,6 @@ var (
 )
 
 func initDb() error {
-
 	db, err = sql.Open("mysql", "root:test123@tcp(localhost:3306)/scuba_logs?parseTime=true")
 	if err != nil {
 		return err
@@ -62,19 +61,16 @@ func createDiver(g *gin.Context) {
 func addNewDive(g *gin.Context) {
 	var diveLog models.DiveLog
 
-	// Bind the request body to the DiveLog struct
 	if err := g.ShouldBindJSON(&diveLog); err != nil {
 		g.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
-	// Check if the depth exceeds the maximum allowed depth
 	if diveLog.Depth > 40 {
 		g.JSON(http.StatusBadRequest, gin.H{"error": "Maximum allowed depth exceeded"})
 		return
 	}
 
-	// Check the dive count for the diver
 	var diveCount int
 	err := db.QueryRow("SELECT COUNT(*) FROM divelogs WHERE diverId = ?", diveLog.DiverId).Scan(&diveCount)
 	if err != nil {
@@ -82,13 +78,11 @@ func addNewDive(g *gin.Context) {
 		return
 	}
 
-	// Check if the maximum allowed dives per diver is reached
 	if diveCount >= 10 {
 		g.JSON(http.StatusBadRequest, gin.H{"error": "Maximum allowed dives per diver reached"})
 		return
 	}
 
-	// Check if it's the first dive for the diver
 	var isFirstDive int
 	err = db.QueryRow("SELECT COUNT(*) FROM divelogs WHERE diverId = ?", diveLog.DiverId).Scan(&isFirstDive)
 	if err != nil {
@@ -96,13 +90,10 @@ func addNewDive(g *gin.Context) {
 		return
 	}
 
-	// Calculate the minimum interval between dives
 	var minInterval int
 	if isFirstDive == 0 {
-
 		minInterval = 0
 	} else {
-		// Retrieve the last interval from the previous dive
 		var lastInterval int
 		err = db.QueryRow("SELECT TIMESTAMPDIFF(MINUTE, MAX(timestamp), NOW()) FROM divelogs WHERE diverId = ?", diveLog.DiverId).Scan(&lastInterval)
 		if err != nil {
@@ -110,11 +101,9 @@ func addNewDive(g *gin.Context) {
 			return
 		}
 
-		// Calculate the minimum interval based on the depth
 		minInterval = lastInterval + int(diveLog.Depth*2)
 	}
 
-	// Insert the dive log into the database
 	stmt, err := db.Prepare("INSERT INTO divelogs (diverId, depth, timestamp) VALUES (?, ?, ?)")
 	if err != nil {
 		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare the dive log insertion"})
@@ -134,7 +123,7 @@ func addNewDive(g *gin.Context) {
 	})
 }
 
-func getAllDivers(g *gin.Context) {
+func getAllDives(g *gin.Context) {
 	var diversLogs []models.DiveLog
 
 	nameOrID := g.Query("nameOrId")
@@ -142,7 +131,6 @@ func getAllDivers(g *gin.Context) {
 	diver, err := db.Query("SELECT id, diverId, depth, timestamp FROM divelogs WHERE diverId = ? OR diverId IN (SELECT id FROM divers WHERE name = ?)", nameOrID, nameOrID)
 	if err != nil {
 		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve dive logs"})
-
 		return
 	}
 	defer diver.Close()
@@ -161,47 +149,60 @@ func getAllDivers(g *gin.Context) {
 	g.JSON(http.StatusOK, diversLogs)
 	return
 }
-func getMaxDepth(g *gin.Context) {
-	nameOrId := g.Query("nameOrId")
 
-	query := "SELECT MAX(depth) FROM divelogs WHERE diverId = ?"
-	rows, err := db.Query(query, nameOrId)
+func getMaxDepth(g *gin.Context) {
+	nameOrID := g.Query("nameOrId")
+
+	var maxDepth sql.NullFloat64
+	err := db.QueryRow("SELECT MAX(depth) FROM divelogs WHERE diverId = ? OR diverId IN (SELECT id FROM divers WHERE name = ?)", nameOrID, nameOrID).Scan(&maxDepth)
 	if err != nil {
-		log.Fatal(err)
+		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query maximum depth"})
+		return
+	}
+
+	if !maxDepth.Valid {
+		maxDepth.Float64 = 0.0
+	}
+
+	g.JSON(http.StatusOK, gin.H{"maxDepth": maxDepth.Float64})
+}
+
+func getAllDivers(g *gin.Context) {
+	var divers []models.Diver
+
+	rows, err := db.Query("SELECT id, name, diverEqp FROM divers")
+	if err != nil {
+		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve divers"})
+		return
 	}
 	defer rows.Close()
 
-	var maxDepth sql.NullFloat64
-	if rows.Next() {
-		err = rows.Scan(&maxDepth)
+	for rows.Next() {
+		var diver models.Diver
+		err := rows.Scan(&diver.Id, &diver.Name, &diver.DiverEqp)
 		if err != nil {
-			log.Fatal(err)
+			g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve divers"})
+			return
 		}
+		divers = append(divers, diver)
 	}
 
-	// Check if the maximum depth is NULL, and set it to 0.0 if it is
-	if maxDepth.Valid {
-		fmt.Printf("Maximum depth for diverId %s: %.2f\n", nameOrId, maxDepth.Float64)
-	} else {
-		fmt.Printf("No maximum depth found for diverId %s\n", nameOrId)
-	}
+	g.JSON(http.StatusOK, divers)
 }
 
 func queryDiversInformation(c *gin.Context) {
 	diverIDs := c.Query("diverIds")
 
-	// Parse the diver IDs
 	idRanges := parseDiverIDs(diverIDs)
 	if len(idRanges) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid diver IDs"})
 		return
 	}
 
-	// Retrieve the diver information from the database
 	var divers []models.Diver
 	for _, idRange := range idRanges {
-		query := buildQuery(idRange)
-		rows, err := db.Query(query)
+		query := "SELECT id, name, diverEqp FROM divers WHERE id >= ? AND id <= ?"
+		rows, err := db.Query(query, idRange.Start, idRange.End)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query divers information"})
 			return
@@ -240,7 +241,6 @@ func parseDiverIDs(diverIDs string) []IDRange {
 	return idRanges
 }
 
-// splitIDs splits the comma-delimited IDs.
 func splitIDs(diverIDs string) []string {
 	return strings.Split(diverIDs, ",")
 }
@@ -265,20 +265,12 @@ func parseIDRange(idRange string) *IDRange {
 	return &IDRange{Start: start, End: end}
 }
 
-// buildQuery builds the SQL query for retrieving divers information by ID range.
-func buildQuery(idRange IDRange) string {
-	query := "SELECT id, name, diverEqp FROM divers WHERE id >= ? AND id <= ?"
-	return fmt.Sprintf(query, idRange.Start, idRange.End)
-}
-
-// IDRange represents a range of IDs.
 type IDRange struct {
 	Start int
 	End   int
 }
 
 func generateDiveReport(g *gin.Context) {
-	// Retrieve the total number of dives per diver from the database
 	rows, err := db.Query("SELECT diverId, COUNT(*) as totalDives FROM divelogs GROUP BY diverId")
 	if err != nil {
 		g.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate dive report"})
@@ -299,24 +291,22 @@ func generateDiveReport(g *gin.Context) {
 
 	g.JSON(http.StatusOK, diveReport)
 }
+
 func main() {
-	// Setup database connection
 	err := initDb()
 	if err != nil {
 		log.Fatal("Failed to connect to the database:", err)
 	}
 
-	// Create Gin router
 	router := gin.Default()
 
-	// Define backend routes
 	router.POST("/divers", createDiver)
-	router.POST("/dives", addNewDive)
-	router.GET("/dives", getAllDivers)
+	router.POST("/newdive", addNewDive)
+	router.GET("/dives", getAllDives)
+	router.GET("/getdivers", getAllDivers)
 	router.GET("/dives/report", generateDiveReport)
 	router.GET("/dives/maxdepth", getMaxDepth)
 	router.GET("/divers", queryDiversInformation)
 
-	// Run the server
 	router.Run(":8080")
 }
