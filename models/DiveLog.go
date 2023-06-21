@@ -7,6 +7,6 @@ import (
 type DiveLog struct {
 	Id        int       `json:"id"`
 	DiverId   int       `json:"diverId"`
-	Depth     int       `json:"depth"`
+	Depth     float64       `json:"deph"`
 	Timestamp time.Time `json:"timestamp"`
 }
